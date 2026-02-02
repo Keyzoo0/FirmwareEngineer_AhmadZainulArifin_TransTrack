@@ -96,27 +96,55 @@ A production-grade firmware solution for STM32F407VGTx microcontroller that mana
 
 ### Pin Mapping Diagram
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         STM32F407G-DISC1                                │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│  ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐   │
-│  │  I2C1 (BME280)   │   │ USART2 (GPS RX)  │   │  ADC1 (Fuel)     │   │
-│  │  PB6 ─── SCL     │   │  PA2 ─── TX      │   │  PA0 ─── AIN     │   │
-│  │  PB7 ─── SDA     │   │  PA3 ─── RX      │   │                  │   │
-│  │  (4.7kΩ pullup)  │   │  (9600 baud)     │   │  4-20mA Loop     │   │
-│  └──────────────────┘   └──────────────────┘   │  250Ω Shunt      │   │
-│                                                 └──────────────────┘   │
-│                                                                         │
-│  ┌──────────────────┐   ┌────────────────────────────────────────┐    │
-│  │ USART1 (Output)  │   │        Status LEDs (PD12-PD15)         │    │
-│  │  PA9  ─── TX     │   │  Green  Orange   Red     Blue          │    │
-│  │  PA10 ─── RX     │   │  (PWR)  (ACT)   (ERR)   (GPS)          │    │
-│  │  (115200 baud)   │   └────────────────────────────────────────┘    │
-│  └──────────────────┘                                                  │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TB
+    subgraph STM32["STM32F407G-DISC1"]
+        subgraph I2C["I2C1 - BME280"]
+            PB6[PB6 - SCL]
+            PB7[PB7 - SDA]
+            PU[4.7kΩ Pull-up]
+        end
+        
+        subgraph UART2["USART2 - GPS"]
+            PA2[PA2 - TX]
+            PA3[PA3 - RX]
+            BAUD2[9600 baud]
+        end
+        
+        subgraph ADC["ADC1 - Fuel Sensor"]
+            PA0[PA0 - Channel 0]
+            LOOP[4-20mA Loop]
+            SHUNT[250Ω Shunt]
+        end
+        
+        subgraph UART1["USART1 - Data Output"]
+            PA9[PA9 - TX]
+            PA10[PA10 - RX]
+            BAUD1[115200 baud]
+        end
+        
+        subgraph LEDS["Status LEDs"]
+            PD12[PD12 - 🟢 Green<br/>Power]
+            PD13[PD13 - 🟠 Orange<br/>Activity]
+            PD14[PD14 - 🔴 Red<br/>Error]
+            PD15[PD15 - 🔵 Blue<br/>GPS Lock]
+        end
+    end
+    
+    BME280[BME280 Sensor] -.->|I2C| I2C
+    GPS[GPS Module] -.->|NMEA| UART2
+    FUEL[Fuel Sensor] -.->|4-20mA| ADC
+    UART1 -.->|JSON| HOST[Host/Logger]
+    
+    classDef i2c fill:#E3F2FD,stroke:#1976D2,stroke-width:2px
+    classDef uart fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px
+    classDef adc fill:#E8F5E9,stroke:#388E3C,stroke-width:2px
+    classDef led fill:#FFF3E0,stroke:#F57C00,stroke-width:2px
+    
+    class I2C i2c
+    class UART2,UART1 uart
+    class ADC adc
+    class LEDS led
 ```
 
 ### I2C Pull-up Resistor Calculation
@@ -174,86 +202,103 @@ Selected: 4.7 kΩ (conservative margin for short PCB traces)
 
 ### State Machine Diagram
 
-```
-                    ┌─────────────────────┐
-                    │       INIT          │
-                    │  - Init peripherals │
-                    │  - Self-test        │
-                    └──────────┬──────────┘
-                               │ [Success]
-                               ▼
-                    ┌─────────────────────┐
-           ┌────────┤       IDLE          │◄────────┐
-           │        │  - Wait 5 seconds   │         │
-           │        │  - Power save       │         │
-           │        └──────────┬──────────┘         │
-           │                   │                     │
-           │                   ▼                     │
-           │        ┌─────────────────────┐         │
-           │        │       READ          │         │
-           │        │  - BME280 (I2C)     │         │
-           │        │  - GPS (UART)       │         │
-           │        │  - Fuel (ADC)       │         │
-           │        └──────────┬──────────┘         │
-           │                   │                     │
-           │                   ▼                     │
-           │        ┌─────────────────────┐         │
-           │        │     TRANSMIT        │         │
-           │        │  - Format JSON      │─────────┘
-           │        │  - Send via UART    │
-           │        └─────────────────────┘
-           │
-           │ [Error detected]
-           │
-           ▼
-    ┌─────────────────────┐
-    │       ERROR         │
-    │  - Log error        │
-    │  - Increment counter│
-    │  - Retry (max 5x)   │
-    └─────────────────────┘
-            │
-            │ [Max retries]
-            ▼
-    ┌─────────────────────┐
-    │   HALT / WATCHDOG   │
-    │   System reset      │
-    └─────────────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> INIT
+    INIT --> IDLE: Success
+    INIT --> ERROR: Init Failed
+    
+    IDLE --> READ: Timer (5s)
+    READ --> TRANSMIT: All sensors OK
+    READ --> ERROR: Sensor fault
+    
+    TRANSMIT --> IDLE: Data sent
+    TRANSMIT --> ERROR: UART error
+    
+    ERROR --> IDLE: Retry < 5
+    ERROR --> HALT: Max retries (5x)
+    HALT --> [*]: Watchdog Reset
+    
+    note right of INIT
+        - Init peripherals
+        - Self-test
+        - Configure clocks
+    end note
+    
+    note right of IDLE
+        - Wait 5 seconds
+        - Power save mode
+        - Monitor GPS
+    end note
+    
+    note right of READ
+        - BME280 (I2C)
+        - GPS (UART)
+        - Fuel (ADC)
+    end note
+    
+    note right of TRANSMIT
+        - Format JSON
+        - Send via UART
+        - Update LEDs
+    end note
+    
+    note right of ERROR
+        - Log error
+        - Increment counter
+        - Attempt recovery
+    end note
 ```
 
 ### Power Management Flow
 
-```
-  ┌────────────────────┐
-  │    RUN Mode        │  Current: ~50 mA
-  │  ∙ All sensors ON  │  - CPU @ 168 MHz
-  │  ∙ I2C/UART active │  - Peripherals active
-  └─────────┬──────────┘
-            │
-            │ No GPS signal for 30s
-            ▼
-  ┌────────────────────┐
-  │   STOP Mode        │  Current: ~100 μA
-  │  ∙ CPU halted      │  - Main regulator OFF
-  │  ∙ RAM retained    │  - RTC running
-  │  ∙ GPIO frozen     │  - Wakeup sources:
-  └─────────┬──────────┘      • RTC alarm (5s)
-            │                  • UART RX (GPS data)
-            │                  • User button
-            ▼
-  ┌────────────────────┐
-  │    RUN Mode        │
-  │  ∙ Resume from     │
-  │    saved state     │
-  └────────────────────┘
+```mermaid
+flowchart TD
+    A[RUN Mode] --> |No GPS signal<br/>for 30 seconds| B[STOP Mode]
+    B --> |Wakeup Event| C[Resume RUN Mode]
+    C --> A
+    
+    A:::runMode
+    B:::stopMode
+    C:::runMode
+    
+    subgraph RUN["RUN Mode Details"]
+        A1[CPU @ 168 MHz]
+        A2[All peripherals active]
+        A3[Current: ~50 mA]
+    end
+    
+    subgraph STOP["STOP Mode Details"]
+        B1[CPU halted]
+        B2[Main regulator OFF]
+        B3[RAM retained]
+        B4[Current: ~100 µA]
+    end
+    
+    subgraph WAKEUP["Wakeup Sources"]
+        W1[RTC alarm - 5s]
+        W2[UART RX - GPS data]
+        W3[User button]
+    end
+    
+    STOP -.-> WAKEUP
+    WAKEUP -.-> C
+    
+    classDef runMode fill:#90EE90,stroke:#2E7D32,stroke-width:3px,color:#000
+    classDef stopMode fill:#FFB6C1,stroke:#C2185B,stroke-width:3px,color:#000
+    
+    style RUN fill:#E8F5E9,stroke:#4CAF50,stroke-width:2px
+    style STOP fill:#FCE4EC,stroke:#E91E63,stroke-width:2px
+    style WAKEUP fill:#FFF9C4,stroke:#FBC02D,stroke-width:2px
 ```
 
 **Power Consumption Estimates:**
-- **Active Mode**: ~50 mA @ 3.3V
-- **STOP Mode**: ~100 μA @ 3.3V
-- **Battery Life** (2500 mAh): 
+- **Active Mode**: ~50 mA @ 3.3V (165 mW)
+- **STOP Mode**: ~100 µA @ 3.3V (0.33 mW)
+- **Battery Life** (2500 mAh @ 3.7V):
   - Continuous run: ~50 hours
   - With 50% duty STOP mode: ~120 hours
+  - With 80% duty STOP mode: ~200 hours
 
 ---
 
@@ -313,20 +358,43 @@ Selected: 4.7 kΩ (conservative margin for short PCB traces)
 
 ```
 $GPRMC,123456.00,A,0607.1234,S,10645.7890,E,0.0,0.0,010226,,,A*6F
-       │         │ │          │ │           │ │   │   │     │││ └─ Checksum
-       │         │ │          │ │           │ │   │   │     ││└─ Mode (A/D/N)
-       │         │ │          │ │           │ │   │   │     │└─ Magnetic variation
-       │         │ │          │ │           │ │   │   │     └─ Magnetic variation direction
-       │         │ │          │ │           │ │   │   └─ Date (DDMMYY)
-       │         │ │          │ │           │ │   └─ Track angle (degrees)
-       │         │ │          │ │           │ └─ Speed (knots)
-       │         │ │          │ │           └─ Longitude (dddmm.mmmm)
-       │         │ │          │ └─ E/W indicator
-       │         │ │          └─ Latitude (ddmm.mmmm)
-       │         │ └─ N/S indicator
-       │         └─ Status (A=valid, V=invalid)
-       └─ UTC time (HHMMSS.SS)
 ```
+
+**Field Breakdown:**
+
+```mermaid
+graph LR
+    START[$ Start] --> TIME[UTC Time<br/>HHMMSS.SS]
+    TIME --> STATUS[Status<br/>A=Valid<br/>V=Invalid]
+    STATUS --> LAT[Latitude<br/>ddmm.mmmm]
+    LAT --> NS[N/S]
+    NS --> LON[Longitude<br/>dddmm.mmmm]
+    LON --> EW[E/W]
+    EW --> SPEED[Speed<br/>knots]
+    SPEED --> TRACK[Track Angle<br/>degrees]
+    TRACK --> DATE[Date<br/>DDMMYY]
+    DATE --> MAG[Magnetic<br/>Variation]
+    MAG --> MODE[Mode<br/>A/D/N]
+    MODE --> CHK[*Checksum<br/>XOR]
+    
+    style START fill:#90EE90,stroke:#2E7D32,stroke-width:2px
+    style STATUS fill:#FFD700,stroke:#F57C00,stroke-width:2px
+    style CHK fill:#FFB6C1,stroke:#C2185B,stroke-width:2px
+    style TIME,LAT,LON fill:#E3F2FD,stroke:#1976D2,stroke-width:2px
+```
+
+**Example Parsing:**
+| Field | Value | Meaning |
+|-------|-------|---------|
+| UTC Time | `123456.00` | 12:34:56.00 UTC |
+| Status | `A` | Valid (Active) |
+| Latitude | `0607.1234,S` | 6°07.1234' South = -6.1187° |
+| Longitude | `10645.7890,E` | 106°45.7890' East = 106.7632° |
+| Speed | `0.0` | 0.0 knots |
+| Track | `0.0` | 0.0° |
+| Date | `010226` | 01 Feb 2026 |
+| Mode | `A` | Autonomous |
+| Checksum | `6F` | XOR validation |
 
 **Checksum Validation**: XOR of all bytes between `$` and `*`
 
@@ -425,16 +493,31 @@ python scripts/prepare-firmware.py \
     --verify
 ```
 
-**Binary Format:**
-```
-┌──────────────────┬──────────────┬──────────────┐
-│  Header (16B)    │  Firmware    │  CRC32 (4B)  │
-├──────────────────┼──────────────┼──────────────┤
-│ - Magic (4B)     │  Application │  Checksum    │
-│ - Version (4B)   │  Code        │              │
-│ - Size (4B)      │              │              │
-│ - Reserved (4B)  │              │              │
-└──────────────────┴──────────────┴──────────────┘
+**Binary Format Structure:**
+
+```mermaid
+graph LR
+    subgraph BINARY[" Firmware Binary File "]
+        direction LR
+        H[Header<br/>16 bytes]
+        F[Firmware Code<br/>Variable size]
+        C[CRC32<br/>4 bytes]
+    end
+    
+    subgraph HEADER[" Header Structure "]
+        direction TB
+        M[Magic Number<br/>4 bytes<br/>0xDEADBEEF]
+        V[Version<br/>4 bytes<br/>1.0.0]
+        S[Size<br/>4 bytes<br/>Firmware length]
+        R[Reserved<br/>4 bytes<br/>0x00000000]
+    end
+    
+    H -.-> HEADER
+    
+    style H fill:#E3F2FD,stroke:#1976D2,stroke-width:2px
+    style F fill:#E8F5E9,stroke:#388E3C,stroke-width:2px
+    style C fill:#FFF3E0,stroke:#F57C00,stroke-width:2px
+    style HEADER fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px
 ```
 
 ---
@@ -472,23 +555,36 @@ Red LED blinks indicate specific errors:
 
 ### Fault Detection & Recovery
 
-```
-┌─────────────────────┐
-│   Sensor Read       │
-└──────────┬──────────┘
-           │
-           ▼
-    ┌─────────────┐
-    │  Timeout?   │────Yes────► Increment error counter
-    └──────┬──────┘               ↓
-           │No                  Retry (max 3x)
-           ▼                       ↓
-    ┌─────────────┐            Return error code
-    │ Valid data? │────No─────► Log to debug UART
-    └──────┬──────┘               ↓
-           │Yes               Continue with partial data
-           ▼
-    Use sensor data
+```mermaid
+flowchart TD
+    START([Sensor Read]) --> CHECK{Timeout?}
+    
+    CHECK -->|Yes| INC[Increment Error Counter]
+    CHECK -->|No| VALID{Valid Data?}
+    
+    INC --> RETRY{Retry Count<br/>< 3?}
+    RETRY -->|Yes| WAIT[Wait 10ms<br/>Backoff]
+    RETRY -->|No| ERROR[Return Error Code]
+    WAIT --> START
+    
+    VALID -->|Yes| USE[Use Sensor Data]
+    VALID -->|No| LOG[Log to Debug UART]
+    
+    LOG --> PARTIAL{Partial Data<br/>Available?}
+    PARTIAL -->|Yes| FALLBACK[Use Last Known<br/>Good Values]
+    PARTIAL -->|No| ERROR
+    
+    ERROR --> STALE[Flag as Stale Data]
+    FALLBACK --> STALE
+    STALE --> CONTINUE([Continue Operation])
+    
+    USE --> SUCCESS([Success])
+    
+    style START fill:#90EE90,stroke:#2E7D32,stroke-width:3px
+    style SUCCESS fill:#90EE90,stroke:#2E7D32,stroke-width:3px
+    style ERROR fill:#FFB6C1,stroke:#C2185B,stroke-width:3px
+    style CONTINUE fill:#FFD700,stroke:#F57C00,stroke-width:3px
+    style USE fill:#87CEEB,stroke:#1976D2,stroke-width:2px
 ```
 
 ### Error Categories
