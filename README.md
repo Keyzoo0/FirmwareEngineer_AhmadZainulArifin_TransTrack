@@ -676,9 +676,9 @@ This project is provided **as-is** for technical assessment purposes.
 
 **Ahmad Zainul Arifin**  
 Firmware Engineer Candidate  
-📧 Email: [your.email@example.com](mailto:your.email@example.com)  
-🔗 LinkedIn: [linkedin.com/in/yourprofile](https://linkedin.com/in/yourprofile)  
-💻 GitHub: [github.com/yourusername](https://github.com/yourusername)
+📧 Email: [ahmadzainularifin6@gmail.com](mailto:ahmadzainularifin6@gmail.com)  
+🔗 LinkedIn: [www.linkedin.com/in/ahmad-zainul-9360a7274](https://linkedin.com/in/yourprofile)  
+💻 GitHub: [github.com/keyzoo0](https://github.com/Keyzoo0)
 
 ---
 
