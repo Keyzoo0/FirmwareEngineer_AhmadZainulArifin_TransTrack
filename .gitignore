@@ -1,0 +1,26 @@
+# Build output
+build/
+build-*/
+tests/build/
+*.o
+*.d
+*.su
+*.cyclo
+*.elf
+*.map
+*.bin
+*.hex
+*.img
+*.list
+
+# IDE / OS
+.vscode/
+.idea/
+.settings/
+.metadata/
+*.launch
+Debug/
+Release/
+.DS_Store
+__pycache__/
+*.pyc
