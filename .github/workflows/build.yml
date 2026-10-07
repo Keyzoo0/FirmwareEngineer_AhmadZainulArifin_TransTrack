@@ -1,0 +1,33 @@
+name: build
+
+on: [push, pull_request]
+
+jobs:
+  firmware:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi cmake
+      - name: Host unit tests
+        run: make -C tests
+      - name: Build bootloader + slot A + slot B
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=MinSizeRel
+          cmake --build build -j
+      - name: Package images
+        run: |
+          python3 scripts/prepare-firmware.py build/app_slot_a.bin --slot a --version 1.1.0 \
+              --bootloader build/bootloader.bin -o build/factory_flash.bin
+          python3 scripts/prepare-firmware.py build/app_slot_b.bin --slot b --version 1.1.0 \
+              -o build/update_slot_b.img
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: |
+            build/*.elf
+            build/*.bin
+            build/*.img
+            build/*.map
